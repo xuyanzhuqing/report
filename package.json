@@ -28,5 +28,14 @@
     "sao": "^1.7.1",
     "update-notifier": "^5.0.1",
     "yargs": "^16.2.0"
+  },
+  "xo": {
+    "extends": "rem/prettier",
+    "ignores": [
+      "page/**"
+    ],
+    "rules": {
+      "ava/no-ignored-test-files": 0
+    }
   }
 }
