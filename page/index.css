@@ -1,0 +1,63 @@
+/*在此表达我对作者的敬仰，其他更多图标请戳 https://www.zhangxinxu.com/sp/icon/css.php */
+css-icon {
+  display: inline-block;
+  height: 1em; width: 1em;
+  font-size: 20px;
+  box-sizing: border-box;
+  text-indent: -9999px;
+  vertical-align: middle;
+  position: relative;
+}
+css-icon::before,
+css-icon::after {
+  content: '';
+  box-sizing: inherit;
+  position: absolute;
+  left: 50%; top: 50%;
+  -ms-transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%);
+}
+/* 图标开始 */
+.icon-menu::before {
+  box-shadow: 0 -.35em, 0 .35em;
+  border-top: 2px solid;
+  width: 100%;
+}
+
+/* 向右箭头 */
+.el-icon-arrow-right:before {
+  display: inline-block;
+  content: ' ';
+  height: .65em;
+  width: .65em;
+  border-style: solid;
+  color: #666;
+  opacity: 0.6;
+  border-width: 2px 0 0 2px;
+  transform: rotate(135deg);
+}
+
+.el-table__body .cell:empty:after {
+  content: '--'
+}
+
+
+
+.icon-upward, .icon-downward, .icon-warnning {
+  height: .65em;
+  width: .65em;
+  border-radius: .65em;
+  opacity: 0.6;
+}
+
+.icon-upward {
+  background:  #39A63E;
+}
+
+.icon-warnning {
+  background-color: #E8B22C;
+}
+
+.icon-downward {
+  background: #D32F2F;
+}

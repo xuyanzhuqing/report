@@ -1,0 +1,1729 @@
+<html lang="en">
+<head>
+  <title>巡检报告</title>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <!--dynamic-by-report.plugin-->
+  <script name="controler">
+    const safeReport = safe(((opener) => {
+      try {
+        const data = JSON.parse(`{{reportData}}`)
+        return data
+      } catch (err) {
+        return opener ? JSON.parse(opener.reportData) : {}
+      }
+    })(window.opener))
+
+    const systemOverall = () => {
+      const fn = safe(safeReport('reportSummary.systemItemSummary', {}))
+      return [
+        setType('节点状态', fn('itemNode', {})),
+        setType('网络', fn('itemNet', {})),
+        setType('OS', fn('itemOs', {})),
+        setType('磁盘', fn('itemDisk', {}))
+      ]
+    }
+
+    const storageOverall= () => {
+      const fn = safe(safeReport('reportSummary.storageItemSummary', {}))
+      return [
+        setType('集群', fn('itemCluster', {})),
+        setType('存储池', fn('itemPool', {})),
+        setType('服务状态', fn('itemService', {})),
+        setType('逻辑卷', fn('itemVolume', {})),
+      ]
+    }
+
+  </script>
+</head>
+<body>
+  <div id="app"></div>
+</body>
+
+<script type="text/x-template" id="common-grid">
+  <div class="common-grid">
+    <slot name="title">
+      <div class="targetTag">{{$attrs.subTitle}}</div>
+    </slot>
+    <grid :column="column" :data="data" class="common-grid" border v-bind="this.attrs || {}" v-on="this.listener || {}"/>
+  </div>
+</script>
+
+<script type="text/x-template" id="index">
+  <el-scrollbar ref="scroll">
+    <div class="top">
+      <p class="title layout">
+        <span class="logo"></span>PhegData-X 云存储平台智能巡检报告
+      </p>
+    </div>
+    <div class="body layout">
+      <div class="left">
+        <div class="menu-title">
+          <span class="title-span">
+            <css-icon class="icon-menu"></css-icon>目录
+          </span>
+        </div>
+        <div class="menu-lists">
+          <template v-for="(item, itemIndex) in menuLists">
+            <div class="parent-menu" :class="{active: item.isLight}" @click.prevent="triggerFold(itemIndex)">{{item.title}}</div>
+          </template>
+        </div>
+      </div>
+      <div class="right" id="right">
+        <div class="right-content" id="rightStatus">
+          <template v-for="(value, index) in menuLists" :key="index">
+            <div v-show="targetIndex === index">
+              <component v-for="val in value.children" :is="val.anchorName" :key="val.anchorName" :subTitle="val.title"></component>
+            </div>
+          </template>
+        </div>
+      </div>
+      <div class="menu-right">
+        <ul>
+          <li v-for="(child, childIndex) in menuLists[targetIndex].children" :key="child.title" :class="{active: child.isActive}"
+          @click="slideTo(childIndex)">
+              {{child.title}}
+          </li>
+        </ul>
+      </div>
+    </div>
+  </el-scrollbar>
+</script>
+
+<script type="text/x-template" id="resultView">
+   <div class="resultView">
+    <div class="targetTag">{{$attrs.subTitle}}</div>
+    <div class="score">
+      <ul class="score-title">
+        <li>评分</li>
+        <li>集群名称</li>
+        <li>操作用户</li>
+        <li>巡检开始时间</li>
+        <li>巡检结束时间</li>
+      </ul>
+      <ul class="score-result">
+        <li class="scores">{{safeReport('overview').score}}</li>
+        <li>{{safeReport('clusterConfSummary').clusterName}}</li>
+        <li>{{safeReport('props').username || '--'}}</li>
+        <li>{{safeReport('props').createTimestamp}}</li>
+        <li>{{safeReport('props').completeTimestamp}}</li>
+      </ul>
+    </div>
+  </div>
+</script>
+
+<script type="text/x-template" id="resultSummary">
+  <div class="resultSummary">
+    <div class="targetTag">{{$attrs.subTitle}}</div>
+    <p class="child-title">检查大类通过率</p>
+    <div id="checkPassRatio" style="width: 900px; height: 400px"></div>
+    <p class="child-title">检查子类通过率</p>
+    <div id="checkDetailPassRatio" style="width: 900px; height: 400px"></div>
+    <p class="child-title">告警级别统计</p>
+    <div id="barLevel" style="display: inline-block;width: 500px;height: 200px;"></div>
+    <div id="pieLevel" style="display: inline-block;width: 430px;height: 200px;"></div>
+    <p class="child-title">告警类别统计</p>
+    <div style="width: 500px;height: 200px;">
+      <div id="barType" style="width: 100%; height: 100%;"/>
+    </div>
+  </div>
+</script>
+
+<script name="common">
+  const App = Vue.component('App', {
+    template: '#index',
+    props: {
+      menu: {
+        type: Array,
+        default: []
+      }
+    },
+    data () {
+      return {
+        targetIndex: 0,
+        menuLists: []
+      }
+    },
+    computed: {
+      scrollbarEl () {
+        return this.$refs.scroll.wrap
+      },
+      rightStatusChild () {
+        return document.getElementById('rightStatus').children
+      }
+    },
+    created () {
+      this.menuLists = this.menu.map(item => {
+        if (item.children) {
+          item.children.map((v) => {
+            v.isActive = false
+            return v
+          })
+        } else {
+          item.isActive = false
+        }
+        item.isLight = false
+        return item
+      })
+      this.menuLists[0].children[0].isActive = true
+      this.menuLists[0].isLight = true
+    },
+    mounted () {
+      this.appScroll()
+    },
+    methods: {
+      appScroll () {
+        const scrollbarEl = this.scrollbarEl
+        scrollbarEl.addEventListener('scroll', this.onScroll)
+        scrollbarEl.scrollTop = 0
+      },
+      slideTo (index) {
+        const targetIndexEle = this.rightStatusChild[this.targetIndex]
+        const targetOffsetTop = targetIndexEle.getElementsByClassName('targetTag')[index].offsetTop
+        const STEP = 100
+        const el = this.scrollbarEl
+        let scrollTop = el.scrollTop
+        // 定义往下滑函数
+        function smoothDown() {
+          // 如果当前 scrollTop 小于 targetOffsetTop 说明视口还没滑到指定位置
+          if (scrollTop < targetOffsetTop) {
+            // 如果和目标相差距离大于等于 STEP 就跳 STEP
+            if (targetOffsetTop - scrollTop >= STEP) {
+              scrollTop += STEP
+            } else {
+              scrollTop = targetOffsetTop
+            }
+            el.scrollTop = scrollTop
+            // 关于 requestAnimationFrame 可以自己查一下，在这种场景下，相比 setInterval 性价比更高
+            requestAnimationFrame(smoothDown)
+          }
+        }
+        // 定义往上滑函数
+        function smoothUp() {
+          if (scrollTop > targetOffsetTop) {
+            if (scrollTop - targetOffsetTop >= STEP) {
+              scrollTop -= STEP
+            } else {
+              scrollTop = targetOffsetTop
+            }
+            el.scrollTop = scrollTop
+            requestAnimationFrame(smoothUp)
+          }
+        }
+
+        scrollTop > targetOffsetTop ? smoothUp() : smoothDown()
+        this.changeAncho(index)
+      },
+      changeAncho (childIndex) {
+        const parentIndex = this.targetIndex
+        this.menuLists = this.menuLists.map((item) => {
+          if (item.children) {
+            item.children.map((val) => {
+              val.isActive = false
+              return val
+            })
+          } else {
+            item.isActive = false
+          }
+          return item
+        })
+
+        const child = Object.assign(this.menuLists[parentIndex].children[childIndex], {
+          isActive: true
+        })
+        this.menuLists[parentIndex].children.splice(childIndex, 1, child)
+      },
+      triggerFold (itemIndex) {
+        this.targetIndex = itemIndex
+        this.menuLists = this.menuLists.map((item) => {
+          item.isLight = false
+          return item
+        })
+        const row = this.menuLists[itemIndex]
+        this.$set(this.menuLists, itemIndex, { ...row,isLight: true })
+        this.changeAncho(0) // 默认选中第一个
+        this.scrollbarEl.scrollTop = 0
+      },
+      onScroll () {
+        const scrollbarEl = this.$refs.scroll.wrap
+        const child = this.rightStatusChild[this.targetIndex]
+        const targetTags = Array.from(child.getElementsByClassName('targetTag'))
+        const offsetTopArr = []
+        targetTags.forEach(item => {
+          offsetTopArr.push(item.offsetTop)
+        })
+        const scrollTop = scrollbarEl.scrollTop
+        const scrollHeight = scrollbarEl.scrollHeight
+        const clientHeight = scrollbarEl.clientHeight
+        // 定义当前点亮的导航下标
+        let navIndex = 0
+        for (let i = 0; i < offsetTopArr.length; i++) {
+          if (scrollTop + 1 >= offsetTopArr[i]) {
+            navIndex = i
+            continue
+          }
+        }
+
+        if (scrollTop + clientHeight < scrollHeight) {
+          this.changeAncho(navIndex)
+        } else {
+          this.changeAncho(offsetTopArr.length - 1)
+        }
+      }
+    }
+  })
+
+  Vue.component('grid', {
+    template: `
+      <elTable
+        v-bind="$attrs"
+        v-on="$listeners"
+        style="width: 100%">
+        <table-column v-for="(val, index) in ($attrs.column || [])" :value="val" :key="index"/>
+      </elTable>
+      `,
+    components: {
+      'table-column': {
+        props: {
+          value: {
+            required: true,
+            type: Object,
+            default: () => ({})
+          }
+        },
+        render: function (h) {
+          const { render, renderHead, ...props } = this.value
+          const types = ['selection', 'index', 'expand']
+          if (types.includes(props.type)) {
+            if (typeof render === 'function') {
+              return h('el-table-column', {
+                props,
+                scopedSlots: {
+                  default: (opt) => render(h, opt)
+                }
+              })
+            }
+            return h('el-table-column', { props })
+          }
+
+          return h('el-table-column', {
+            props,
+            scopedSlots: {
+              default: ({row, column, $index}) => {
+                return render ? render(h, {row, column, $index}) : row[column.property]
+              },
+              header: ({ column, $index }) => {
+                const newColumn = Object.assign({}, column, props)
+                return this.value.renderHead ? this.value.renderHead(h, { column: newColumn, $index }) : column.label
+              }
+            }
+          })
+        }
+      }
+    }
+  })
+
+  const chartMixin = {
+    data () {
+      return {
+        echartData: {
+          title: [
+            {
+              name: '灾难',
+              color: '#DE4141'
+            },
+            {
+              name: '严重',
+              color: '#ED6A00'
+            },
+            {
+              name: '一般严重',
+              color: '#EB9D5E'
+            },
+            {
+              name: '警告',
+              color: '#FFC232'
+            }
+          ]
+        }
+      }
+    },
+    methods: {
+      initSingleBar (dom, { xData, data, barWidth = 40, reverse = false }) {
+        const myChart = echarts.init(dom)
+        let xAxis = {
+          type: 'category',
+          data: xData,
+          axisLine: { show: false },
+          axisTick: { show: false },
+          axisLabel: {
+            color: '#77819B'
+          }
+        }
+        let yAxis = {
+          type: 'value',
+          axisLine: { show: false },
+          axisTick: { show: false },
+          splitLine: {
+            lineStyle: {
+              color: '#DFE1E6',
+              type: 'dotted'
+            }
+          },
+          axisLabel: {
+            formatter: '{value} %'
+          }
+        }
+
+        if (reverse) {
+          [yAxis, xAxis] = [xAxis, yAxis]
+        }
+
+        const option = {
+          xAxis,
+          yAxis,
+          series: [{
+            data,
+            type: 'bar',
+            barWidth,
+            itemStyle: {
+              color: '#4668DB'
+            },
+            label: {
+              show: true,
+              position: reverse ? 'right' : 'top',
+              formatter: '{c}%'
+            }
+          }]
+        }
+        myChart.setOption(option)
+      },
+      initPie (dom, { title, data }) {
+        const myChart = echarts.init(dom)
+        const option = {
+          legend: {
+            orient: 'vertical',
+            right: 60,
+            top: 20,
+            bottom: 20,
+            icon: 'rect',
+            itemHeight: 10,
+            itemWidth: 10,
+            data: title,
+          },
+          series: [
+            {
+              type: 'pie',
+              hoverOffset: 0,
+              label: {
+                formatter: '{c}',
+                position: 'inside'
+              },
+              radius: '75%',
+              center: ['40%', '50%'],
+              data
+            }
+          ]
+        }
+        myChart.setOption(option)
+      },
+      initBar (dom, params) {
+        const { xData, badData, recoverData } = params
+        const myChart = echarts.init(dom)
+        const option = {
+          legend: {
+            data: ['故障', '恢复'],
+            right: 0,
+            orient: 'vertical',
+            top:10,
+            icon: 'rect',
+            itemWidth: 10,
+            itemHeight: 10
+          },
+          grid: {
+            top: 20,
+            right: 100,
+          },
+          tooltip: {},
+          xAxis: {
+            type: 'category',
+            data: xData,
+            axisLine: { show: false },
+            axisTick: { show: false },
+            axisLabel: {
+              color: '#77819B'
+            }
+          },
+          yAxis: {
+            type: 'value',
+            axisLine: { show: false },
+            axisTick: { show: false },
+            splitLine: {
+              lineStyle: {
+                color: '#DFE1E6',
+                type: 'dotted'
+              }
+            }
+          },
+          series: [
+            {
+              data: badData,
+              name: '故障',
+              type: 'bar',
+              stack: 'one',
+              color: '#D26742',
+              barWidth: 23,
+              label: {
+                show: true
+              },
+              backgroundStyle: {
+                  color: 'transparent'
+              }
+            },
+            {
+              data: recoverData,
+              name: '恢复',
+              type: 'bar',
+              stack: 'one',
+              label: {
+                show: true
+              },
+              barWidth: 23,
+              color: '#9FAF2A',
+              backgroundStyle: {
+                color: 'transparent'
+              }
+            }
+          ]
+        }
+        myChart.setOption(option)
+      }
+    }
+  }
+
+  const overallMixin = {
+    template: '#common-grid',
+    data () {
+      return {
+        attrs: {
+          'span-method': this.objectSpanMethod
+        }
+      }
+    },
+    computed: {
+      column () {
+        return [
+          {
+            label: '检查子类',
+            prop: 'type'
+          },
+          {
+            label: '检查项',
+            prop: 'checkName'
+          },
+          {
+            label: '通过数',
+            prop: 'passNum'
+          },
+          {
+            label: '检查总数',
+            prop: 'totalNum'
+          },
+          {
+            label: '通过率',
+            prop: 'passRate',
+            render: this.join
+          }
+        ]
+      },
+      data () {
+        return []
+      }
+    },
+    methods: {
+      join (h, { row, column }) {
+        const val = row[column.property]
+
+        return typeof val !== 'undefined' ? val + '%' : val
+      },
+      objectSpanMethod ({ row, column, rowIndex, columnIndex }) {
+        if (columnIndex === 0) {
+          const preRow = this.data[rowIndex - 1]
+
+          let nextIndex = rowIndex + 1
+          while(this.data[nextIndex] && this.data[nextIndex].type === row.type) {
+            nextIndex++
+          }
+
+          if ((!preRow || preRow.type !== row.type) && nextIndex - 1 - rowIndex > 0) {
+            return [nextIndex - rowIndex, 1]
+          }
+
+          if (preRow && preRow.type === row.type) {
+            return [0, 0]
+          }
+        }
+      }
+    }
+  }
+</script>
+<script name="biz">
+  Vue.component('resultView', {
+    template: '#resultView'
+  })
+
+  Vue.component('clusterOverAll', {
+    template: '#common-grid',
+    data () {
+      return {
+        data: [ safeReport('clusterConfSummary') ],
+        column: [
+          {
+            prop: 'clusterName',
+            label: '集群名称'
+          },
+          {
+            prop: 'transportType',
+            label: '传输协议'
+          },
+          {
+            prop: 'managementNode',
+            label: '管理节点'
+          },
+          {
+            prop: 'totalNode',
+            label: '节点总数'
+          },
+          {
+            prop: 'version',
+            label: '版本'
+          }
+        ]
+      }
+    }
+  })
+
+  Vue.component('resultSummary', {
+    template: '#resultSummary',
+    mixins: [chartMixin],
+    mounted () {
+      this.initChart()
+    },
+    methods: {
+      initChart () {
+        const level = document.getElementById('barLevel')
+        const pieLevel = document.getElementById('pieLevel')
+        const barType = document.getElementById('barType')
+        const checkPassRatio = document.getElementById('checkPassRatio')
+        const checkDetailPassRatio = document.getElementById('checkDetailPassRatio')
+        const alarms = safeReport('alarmList.alarms', [])
+
+        // 告警级别统计
+        const levelData = groupBy(alarms, 'priorityDesc')
+        const levelParams = {
+          xData: Object.keys(levelData),
+          badData: Object.values(levelData).map(group => group.length),
+          recoverData: Object.values(levelData).map(group => group.map(v => v.alarmRecoverTime).filter(v => v).length)
+        }
+        this.initBar(level, levelParams)
+
+        // 告警级别统计 - 饼图
+        const pieData = []
+        const echartData = this.echartData
+        for (let key in levelData) {
+          const { color } = echartData.title.find(v => v.name === key) || {}
+          pieData.push({
+            name: key,
+            itemStyle: { color },
+            value: levelData[key].length
+          })
+        }
+
+        this.initPie(pieLevel, {
+          title: Object.keys(levelData),
+          data: pieData
+        })
+
+        // 告警类别统计
+        const groupyType = groupBy(alarms, 'alarmType')
+        const typeParams = {
+          xData: Object.keys(groupyType),
+          badData: Object.values(groupyType).map(group => group.length),
+          recoverData: Object.values(groupyType).map(group => group.map(v => v.alarmRecoverTime).filter(v => v).length)
+        }
+        this.initBar(barType, typeParams)
+
+        // 检查大类通过率 检查子类通过率
+        const sys = systemOverall()
+        const storage = storageOverall()
+
+        this.initSingleBar(checkPassRatio, {
+          xData: ['系统', '存储'],
+          data: [
+            this.count(sys.flat()),
+            this.count(storage.flat())
+          ]
+        })
+        const { xData, data } = this.getDetailData(sys, storage)
+        this.initSingleBar(checkDetailPassRatio, {
+          xData,
+          data,
+          reverse: true,
+          barWidth: 20
+        })
+      },
+      count (arr) {
+        const total = arr.map(v => v.passRate).reduce((a, c) => {
+          return (a || 0) + (c || 0)
+        })
+        const divide = arr.filter(v => v.totalNum > 0).length
+        const average = total / divide
+        return average.toFixed(2)
+      },
+      getDetailData (sys, storage) {
+        const getField = (arr) => arr.filter(v => !isEmpty(v)).map(v => v[0].type)
+        const getData = (arr) => arr.filter(v => !isEmpty(v)).map(v => this.count(v))
+        return {
+          xData: getField(sys).concat(getField(storage)),
+          data: getData(sys).concat(getData(storage))
+        }
+      }
+    }
+  })
+
+  Vue.component('exceptionItem', {
+    template: '#common-grid',
+    data () {
+      const data = systemOverall().concat(storageOverall()).flat().filter(v => v.reason)
+      const licSuggest = '请查看当前许可信息，联系技术工程师更新许可。'
+      const pdsSuggest = '请检查各节点软件版本，收集存储日志，联系技术支持工程师进行升级处理。'
+      const nodeSuggest = '请检查以上节点状态及相关服务状态，收集存储日志，联系技术支持工程师进行处理。'
+      return {
+        data,
+        suggestion: {
+          "节点状态": "请检查以上节点的管理网络是否故障，包括管理网口光模块、光纤线、交换机等物理设备，若发现异常请及时更换。",
+          "IPMI状态": "请检查以上节点电源、风扇、电压、温度等状态是否正常，若发现异常请及时联系服务器厂商进行维修更换。",
+          "网络状态": "请检查以上节点网口是否故障，包括网口光模块、光纤线、交换机等物理设备，若发现异常请及时更换。",
+          "网络链路状态(IB)": "请检查以上节点IB网口是否故障，包括网口光模块、光纤线、交换机等物理设备，若发现异常请及时更换。",
+          "文件空间使用率": "请检查挂载点下文件使用情况，挂载点文件使用率过高通常原因有日志陡增、临时文件过多等，尝试清理不需要文件释放空间。",
+          "时钟检查": "请检查集群内各节点的时钟是否一致，若不一致请手动进行时钟同步。",
+          "磁盘健康状态": "请检查集群中各节点的服务状态，收集存储日志，联系技术支持工程师进行处理。",
+          "磁盘状态": "请根据存储维护手册或进入换盘流程对巡检异常的磁盘进行更换。",
+          "集群状态": "请检查存故障储管理节点存储网络及系统状态，包括存储网口光模块，光纤线，交换机、节点掉电等物理设备，收集存储日志，联系技术支持工程师进行处理。",
+          "license版本状态": licSuggest,
+          "license有效期状态": licSuggest,
+          "license容量状态": licSuggest,
+          'pds版本状态': pdsSuggest,
+          "软件版本状态": pdsSuggest,
+          "存储池状态": "请检查以上存储池状态，如存储池状态为健康状态，建议对存储池进行扩容；如存储池状态为降级状态，建议检查存储池中故障磁盘或故障节点并对其进行修复。",
+          "存储池容量状态": "请查看以上存储池容量使用情况，并对存储池进行节点扩容或磁盘扩容。",
+          "节点MDS状态": nodeSuggest,
+          "节点BAC状态": nodeSuggest,
+          "节点IOS状态": nodeSuggest,
+          "节点IOSD状态": nodeSuggest,
+          "逻辑卷状态": "请检查逻辑卷状态，收集存储日志，联系技术支持工程师进行处理。",
+          "逻辑卷挂载状态": "请检查逻辑卷挂载路径，收集存储日志，联系技术支持工程师进行处理。"
+        }
+      }
+    },
+    computed: {
+      column () {
+        return [
+          {
+            type: 'expand',
+            render: (h, { row }) => {
+              return h('grid', {
+                attrs: {
+                  'show-header': false,
+                  border: false,
+                  column: [
+                    {
+                      prop: 'desc',
+                      width: 120
+                    },
+                    {
+                      prop: 'value'
+                    }
+                  ],
+                  data: [
+                    {
+                      desc: '检查异常对象',
+                      value: row.reason
+                    },
+                    {
+                      desc: '建议',
+                      value: this.suggestion[row.checkName]
+                    }
+                  ]
+                }
+              })
+            }
+          },
+          {
+            label: '序号',
+            render: (h, { $index }) => $index + 1
+          },
+          {
+            prop: 'checkName',
+            label: '异常检查项'
+          },
+          {
+            prop: 'type',
+            label: '检查大类'
+          },
+          {
+            prop: 'passRate',
+            label: '检查结果',
+            render: (h, { row }) => {
+              const text = row.passRate
+              if (text > 0) {
+                return `${text} %`
+              }
+              return text
+            }
+          }
+        ]
+      }
+    }
+  })
+
+  Vue.component('systemOverall', {
+    template: '#common-grid',
+    mixins: [overallMixin],
+    computed: {
+      data: () => systemOverall().flat()
+    }
+  })
+
+  Vue.component('systemNode', {
+    template: '#common-grid',
+    data () {
+      return {
+        data: safeReport('systemDetail.nodesReport', []),
+        column: [
+          {
+            label: '主机名',
+            prop: 'hostName'
+          },
+          {
+            label: '管理IP',
+            prop: 'managementIp',
+            width: 140
+          },
+          {
+            label: '节点类型',
+            prop: 'nodeType'
+          },
+          {
+            label: '节点状态',
+            prop: 'nodeState',
+            align: 'center',
+            render: (h, { row }) => formatStatus(h, row.nodeState)
+          }
+        ]
+      }
+    }
+  })
+
+  Vue.component('systemNet', {
+    template: '#common-grid',
+    data () {
+      const data = []
+      const originData = safeReport('systemDetail.netReport', [])
+      originData.forEach(v => {
+        if (isEmpty(v.slaves)) {
+          data.push(Object.assign({ _span: 1 }, v))
+        } else {
+          const { slaves, ...rest } = v
+          const pend = slaves.map(m => {
+            m.subState = m.state
+            return Object.assign({ _span: 0 }, m, rest)
+          })
+          pend[0]._span = slaves.length
+          data.push(...pend)
+        }
+      })
+      return {
+        attrs: {
+          'span-method': this.objectSpanMethod
+        },
+        data,
+        originData,
+        column: [
+          {
+            label: '主机名',
+            prop: 'hostName',
+            fixed: 'left'
+          },
+          {
+            label: '管理IP',
+            prop: 'managementIp',
+            width: 140,
+            fixed: 'left'
+          },
+          {
+            label: '网卡名称',
+            prop: 'deviceName'
+          },
+          {
+            label: '网卡 IP',
+            prop: 'ip',
+            width: 140
+          },
+          {
+            label: '网卡状态',
+            prop: 'state',
+            align: 'center',
+            render: (h, { row }) => formatStatus(h, row.state === 'up')
+          },
+          {
+            label: '子卡名称',
+            prop: 'name'
+          },
+          {
+            label: '子卡状态',
+            align: 'center',
+            prop: 'subState',
+            render: (h, { row }) => {
+              if ('subState' in row) {
+                return formatStatus(h, row.state === 'up')
+              }
+              return '--'
+            }
+          },
+          {
+            label: '型号',
+            prop: 'model',
+            width: 400
+          },
+          {
+            label: 'PCI地址',
+            prop: 'pci',
+            width: 100
+          },
+          {
+            label: '固件版本',
+            prop: 'firmwareVersion',
+            width: 240
+          },
+          {
+            label: '驱动版本',
+            prop: 'driverVersion'
+          },
+          {
+            label: '速率',
+            prop: 'speed'
+          }
+        ]
+      }
+    },
+    methods: {
+      objectSpanMethod ({ row, column, rowIndex, columnIndex }) {
+        const originData = this.originData
+        if (columnIndex > 4) {
+          return
+        }
+
+        return [row._span, 1]
+      }
+    }
+  })
+
+  Vue.component('systemOS', {
+    template: '#common-grid',
+    data () {
+      return {
+        data: safeReport('systemDetail.osReport', []),
+        column: [
+          {
+            type: 'expand',
+            render: (h, { row }) => {
+              return h('grid', {
+                attrs: {
+                  border: false,
+                  column: [
+                    {
+                      label: '文件系统目录',
+                      prop: 'path'
+                    },
+                    {
+                      label: '文件空间使用率',
+                      prop: 'usageRate',
+                      width: 200
+                    }
+                  ],
+                  data: row.fileSystem
+                }
+              })
+            }
+          },
+          {
+            label: '主机名',
+            prop: 'hostName'
+          },
+          {
+            label: '管理IP',
+            prop: 'managementIp'
+          },
+          {
+            label: 'BIOS 版本',
+            prop: 'biosVersion'
+          },
+          {
+            label: '操作系统版本',
+            prop: 'distribution'
+          },
+          {
+            label: 'ntp server地址',
+            prop: 'ntpAttr'
+          }
+        ]
+      }
+    }
+  })
+
+  Vue.component('systemDisk', {
+    template: '#common-grid',
+    data () {
+      return {
+        data: safeReport('systemDetail.disksReport', []),
+        column: [
+          {
+            label: '主机名',
+            prop: 'hostName'
+          },
+          {
+            label: '管理IP',
+            prop: 'managementIp',
+            width: 120
+          },
+          {
+            label: '设备名称',
+            prop: 'devName'
+          },
+          {
+            label: '磁盘类型',
+            prop: 'diskType'
+          },
+          {
+            renderHead: renderHead('总容量', 'GB'),
+            prop: 'size',
+            render: (h, { row }) => toGB(row.size)
+          },
+          {
+            renderHead: renderHead('已使用容量', 'GB'),
+            width: 100,
+            prop: 'usedSize',
+            render: (h, { row }) => toGB(row.usedSize)
+          },
+          {
+            label: 'raid槽位',
+            prop: 'ces'
+          },
+          {
+            label: '固件版本',
+            prop: 'firmwareVersion'
+          },
+          {
+            label: '磁盘状态',
+            prop: 'status',
+            align: 'center',
+            render: (h, { row }) => formatStatus(h, row.status)
+          },
+        ]
+      }
+    }
+  })
+
+  Vue.component('storageOverall', {
+    template: '#common-grid',
+    mixins: [overallMixin],
+    computed: {
+      data: () => storageOverall().flat()
+    }
+  })
+
+  Vue.component('storageCluster', {
+    template: '#common-grid',
+    computed: {
+      column () {
+        return [
+        {
+            prop: 'name',
+            label: '集群名称'
+          },
+          {
+            prop: 'clusterId',
+            label: '集群ID',
+            width: 200
+          },
+          {
+            prop: 'transportType',
+            label: '传输协议'
+          },
+          {
+            prop: 'health',
+            label: '集群状态',
+            align: 'center',
+            render: (h, { row }) => formatStatus(h, row.health)
+          },
+          {
+            prop: 'status',
+            label: 'license版本',
+            render: this.getLicense('version')
+          },
+          {
+            prop: 'status',
+            label: '容量限制',
+            render: this.getLicense('capacityLimit')
+          },
+          {
+            prop: 'status',
+            label: '可用时间（天）',
+            render: this.getLicense('availableDays')
+          },
+          {
+            prop: 'status',
+            label: '总有效期（天）',
+            render: this.getLicense('totalDays')
+          },
+        ]
+      }
+    },
+    data () {
+      return {
+        data: safeReport('storageDetail.clustersReport', [])
+      }
+    },
+    methods: {
+      getLicense (path) {
+        return (h, { row }) => {
+          return row.licenseReport[path]
+        }
+      }
+    }
+  })
+
+  Vue.component('version', {
+    template: '#common-grid',
+    computed: {
+      column () {
+        return [
+          {
+            prop: 'hostname',
+            label: '主机名'
+          },
+          {
+            prop: 'manageIp',
+            label: '管理IP'
+          },
+          {
+            prop: 'nodeType',
+            label: '节点类型'
+          },
+          {
+            prop: 'allAvaliable',
+            label: 'pds-mds版本',
+            render: this.renderLi('mds')
+          },
+          {
+            prop: 'status',
+            label: 'pds-bac版本',
+            render: this.renderLi('bac')
+          },
+          {
+            prop: 'status',
+            label: 'pds-ios版本',
+            render: this.renderLi('ios')
+          },
+          {
+            prop: 'status',
+            label: '版本状态',
+            align: 'center',
+            render: (h, { row }) => formatStatus(h, row.status !== 'UNNORMAL')
+          },
+        ]
+      },
+    },
+    data () {
+      return {
+        data: safeReport('storageDetail.versionsReport', [])
+      }
+    },
+    methods: {
+      renderLi (path) {
+        return (h, {row}) => {
+          const { installed, running } = row[path]
+          const result = []
+          if (installed) {
+            result.push(installed)
+          }
+          if (running) {
+            result.push(running)
+          }
+          if (installed === running && running !== '') {
+            result.pop()
+          }
+
+          if (result.length === 0) {
+            result.push('--')
+          }
+
+          const isDiff = result.length === 2
+          const text = result.join(' / ')
+
+          return h('p', isDiff ? [h('font', {
+            style: 'color: #d1d15a'
+          }, text)] : text)
+        }
+      }
+    }
+  })
+
+  Vue.component('nodeInfo', {
+    template: '#common-grid',
+    computed: {
+      column () {
+        return [
+          {
+            prop: 'hostName',
+            label: '主机名称'
+          },
+          {
+            prop: 'managementIp',
+            label: '管理 IP'
+          },
+          {
+            prop: 'nodeType',
+            label: '节点类型'
+          },
+          {
+            prop: 'mdsState',
+            label: 'mds服务状态',
+            align: 'center',
+            render: (h, { row }) => formatStatus(h, row.mdsState)
+          },
+          {
+            prop: 'bacState',
+            label: 'bac服务状态',
+            align: 'center',
+            render: (h, { row }) => formatStatus(h, row.bacState)
+          },
+          {
+            prop: 'iosState',
+            label: 'ios服务状态',
+            align: 'center',
+            render: (h, { row }) => formatStatus(h, row.iosState)
+          },
+          {
+            prop: 'iosdState',
+            label: 'iosd服务状态',
+            align: 'center',
+            render: (h, { row }) => formatStatus(h, row.iosdState)
+          }
+        ]
+      },
+    },
+    data () {
+      return {
+        data: safeReport('storageDetail.servicesReport', [])
+      }
+    }
+  })
+
+  Vue.component('poolInfo', {
+    template: '#common-grid',
+    computed: {
+      column () {
+        return [
+          {
+            prop: 'poolName',
+            label: '存储池名称'
+          },
+          {
+            prop: 'poolTypeName',
+            label: '类型'
+          },
+          {
+            prop: 'size',
+            label: '总容量（GB）',
+            render: (h, { row }) => toGB(row.size)
+          },
+          {
+            prop: 'usedSize',
+            label: '已使用容量（GB）',
+            render: (h, { row }) => toGB(row.usedSize)
+          },
+          {
+            prop: 'isMaintenance',
+            label: '是否开启维护模式',
+            render: (h, { row }) => {
+              return h('div', row.isMaintenance ? '是' : '否')
+            }
+          },
+          {
+            prop: 'poolState',
+            label: '存储池状态',
+            render: (h, { row }) => {
+              const state = row.poolState
+              let icon = ''
+              if (state === 'HEALTHY') {
+                icon =  formatStatus(h, true)
+              } else if (state === 'ERROR' || state === 'UNINITED' || state === 'UNINIT') {
+                icon = formatStatus(h, false)
+              } else {
+                icon =  h('css-icon', { class: 'icon-warnning' })
+              }
+              return h('div', { }, [icon, h('span', { style: 'margin-left: 10px' }, state)])
+            }
+          }
+        ]
+      },
+    },
+    data () {
+      return {
+        data: safeReport('storageDetail.poolsReport', [])
+      }
+    }
+  })
+
+  Vue.component('logicInfo', {
+    template: '#common-grid',
+    computed: {
+      column () {
+        return [
+          {
+            prop: 'volumeName',
+            label: '逻辑卷名称',
+            width: 200
+          },
+          {
+            prop: 'poolName',
+            label: '存储池名称'
+          },
+          {
+            prop: 'volumeTypeName',
+            label: '类型'
+          },
+          {
+            prop: 'size',
+            label: '容量(GB)',
+            render: (h, { row }) => toGB(row.size)
+          },
+          {
+            prop: 'attachPoint',
+            label: '挂载点'
+          },
+          {
+            prop: 'attachActualState',
+            label: '挂载状态',
+            align: 'center',
+            render: (h, { row }) => {
+              if ('attachActualState' in row) {
+                return formatStatus(h, row.attachActualState)
+              }
+              return '未挂载'
+            }
+          },
+          {
+            prop: 'volumeResState',
+            label: '卷状态',
+            render: (h, { row }) => {
+              const span = h('span', { style: 'padding-left: 10px' }, row.volumeResState)
+              return h('div', [formatStatus(h, row.volumeResState === 'available'), span])
+            }
+          }
+        ]
+      },
+    },
+    data () {
+      return {
+        data: safeReport('storageDetail.volumesReport', [])
+      }
+    }
+  })
+
+  Vue.component('alarm', {
+    template: '#common-grid',
+    computed: {
+      column () {
+        return [
+          {
+            prop: 'priorityDesc',
+            label: '级别',
+            width: 80
+          },
+          {
+            prop: 'status',
+            label: '状态',
+            width: 60,
+            align: 'center',
+            render: (h, { row }) => formatStatus(h, row.status === 'OK')
+          },
+          {
+            prop: 'alarmType',
+            label: '告警类型',
+            width: 80
+          },
+          {
+            prop: 'note',
+            label: '告警项'
+          },
+          {
+            prop: 'alarmObject',
+            label: '故障定位'
+          },
+          {
+            prop: 'alarmMessage',
+            label: '故障详情'
+          },
+          {
+            prop: 'alarmTime',
+            label: '发生时间'
+          }
+        ]
+      },
+    },
+    data () {
+      return {
+        data: safeReport('alarmList.alarms', []).filter(v => v.status !== 'OK')
+      }
+    }
+  })
+</script>
+<script type="text/javascript">
+  const menu = [
+    {
+      title: '巡检结果概览',
+      children: [
+        {
+          title: '概览',
+          anchorName: 'resultView'
+        },
+        {
+          title: '巡检结果统计',
+          anchorName: 'resultSummary'
+        },
+        {
+          title: '巡检异常项',
+          anchorName: 'exceptionItem'
+        }
+      ]
+    },
+    {
+      title: '集群配置概览',
+      children: [
+        {
+          title: '集群配置概览',
+          anchorName: 'clusterOverAll',
+          isActive: true
+        }
+      ]
+    },
+    {
+      title: '系统巡检',
+      children: [
+        {
+          title: '系统大类巡检详情',
+          anchorName: 'systemOverall'
+        },
+        {
+          title: '节点状态',
+          anchorName: 'systemNode'
+        },
+        {
+          title: '网络',
+          anchorName: 'systemNet'
+        },
+        {
+          title: 'OS',
+          anchorName: 'systemOS'
+        },
+        {
+          title: '磁盘',
+          anchorName: 'systemDisk'
+        }
+      ]
+    },
+    {
+      title: '存储巡检',
+      children: [
+        {
+          title: '存储巡检详情',
+          anchorName: 'storageOverall'
+        },
+        {
+          title: '存储集群',
+          anchorName: 'storageCluster'
+        },
+        {
+          title: '软件版本',
+          anchorName: 'version'
+        },
+        {
+          title: '服务状态',
+          anchorName: 'nodeInfo'
+        },
+        {
+          title: '存储池信息',
+          anchorName: 'poolInfo'
+        },
+        {
+          title: '逻辑卷信息',
+          anchorName: 'logicInfo'
+        }
+      ]
+    },
+    {
+      title: '告警列表',
+      children: [
+        {
+          title: '导出告警',
+          anchorName: 'alarm'
+        }
+      ]
+    }
+  ]
+  new Vue({ render: h => h(App, { props: { menu } }) }).$mount('#app')
+</script>
+</html>
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    font-size: 14px;
+  }
+  a {
+    text-decoration: none;
+    color: #000;
+    }
+  a, li {
+    list-style: none
+  }
+  .layout {
+    width: 1280px;
+    margin: 0 auto;
+  }
+  .top {
+    height: 50px;
+    position: fixed;
+    top: 0;
+    width: 100%;
+    background: #fff;
+    z-index: 2;
+    border-bottom: 1px solid rgba(0,0,0,0.1)
+  }
+  .title {
+    line-height: 50px;
+    font-size: 18px;
+    font-weight: bold;
+  }
+  .body {
+    display: flex;
+    margin-top: 50px;
+  }
+  .left {
+    min-width: 180px;
+    background-color: #F2F4F9;
+    position: fixed;
+    height: 100%;
+    z-index: 2;
+  }
+  .menu-title {
+    height: 50px;
+    line-height: 50px;
+  }
+  .menu-title .icon-menu {
+    margin-right: 10px;
+    font-size: 12px;
+    color: #4668DB
+  }
+  .menu-lists {
+    height: calc(100% - 50px);
+  }
+  .title-span {
+    display: inline-block;
+    border-bottom: 1px solid #DADDE5;
+    width: 100%;
+  }
+  .menu-lists, .menu-title {
+    padding-left: 20px;
+    border-bottom: 1px solid rgba(0,0,0,0.1)
+  }
+  .children-menu {
+    margin-left: 20px;
+  }
+  .parent-menu {
+    position: relative;
+    height: 34px;
+    line-height: 34px;
+    margin-bottom: 8px;
+    color: rgba(0, 0, 0, 0.6);
+    cursor: pointer;
+    padding-left: 10px;
+  }
+  .parent-menu.active {
+    background: #fff;
+  }
+  .parent-menu.active:before {
+    content: '';
+    position: absolute;
+    height: 100%;
+    left: 0;
+    top: 0;
+    border-left: 3px solid #4668DB;
+  }
+  .children-menu ul li, .menu-right ul li {
+    height: 34px;
+    line-height: 34px;
+    padding-left: 16px;
+    margin-bottom: 8px;
+    font-size: 12px;
+    border-left: 3px solid transparent;
+    cursor: pointer;
+  }
+  .children-menu ul li.active, .menu-right ul li.active {
+    background: #fff;
+    border-left: 3px solid #4668DB ;
+    color: #4668DB;
+  }
+  .right {
+    flex: 1;
+    height: 100%;
+    overflow: auto;
+    margin-right: 140px;
+    position: relative;
+    margin-left: 180px;
+    /* background-color: red */
+  }
+  .right-content {
+    padding-left: 29px;
+  }
+  #rightStatus {
+    margin-bottom: 100px
+  }
+  .menu-right {
+    /* position: absolute; */
+    position: fixed;
+    height: 100%;
+    width: 130px;
+    top: 60px;;
+    right: calc((100% - 1280px) / 2)
+  }
+  .targetTag, .parentBodyTitle {
+    font-size: 18px;
+    font-weight: bold;
+    margin-top: 41px;
+  }
+  ul.score-title {
+    display: flex;
+    margin-top: 16px;
+  }
+  ul.score-title li, ul.score-result li{
+    flex: 1;
+    line-height: 20px;
+  }
+  ul.score-result {
+    display: flex;
+    height: 33px;
+  }
+  ul.score-result li {
+    margin-top: 9px;
+  }
+  .score-result .scores {
+    font-size: 24px;
+    color: #E47A0C;
+    font-weight: 700;
+    margin-top: 5px;
+  }
+
+  .gray-table table .el-table__row td:nth-child(1) {
+    background: #F5F6FA;
+    font-weight: bold;
+  }
+  .common-grid {
+    margin-top: 17px;
+  }
+  .el-table__header-wrapper th {
+    background: #F5F6FA;
+  }
+  .el-table thead {
+    color: #000
+  }
+  .child-title {
+    margin-top: 26px;
+    margin-bottom: 19px;
+    font-size: 16px;
+    line-height: 22px;
+  }
+
+  /* 正常异常颜色 */
+  .unnormal {
+    color: #D54545;
+  }
+  .normal {
+    color: #39A63E;
+  }
+  .bold {
+    font-weight: bold
+  }
+  .tableNum {
+    clear: both;
+  }
+  .tableNum .num {
+    float: right;
+    margin-top: 26px;
+    margin-bottom: 19px;
+    line-height: 22px;
+  }
+  #barLevel, #barType {
+    float: left;
+    width: 500px;
+    height: 200px;
+  }
+  @media screen and (max-width: 1280px) {
+    .right {
+      margin-right: 0;
+      width: 960px;
+    }
+    .menu-right {
+      display: none;
+    }
+  }
+
+   /* 企业 logo */
+  .logo {
+    display: inline-block;
+    position: relative;
+    margin-right: 6px;
+    margin-bottom: -2px;
+    width: 18px;
+    height: 21px;
+    background: #4668DB;
+    border-radius: 0 50% 50% 0;
+  }
+  .logo:before {
+    content: '';
+    position: absolute;
+    left: 20%;
+    bottom: 0;
+    width: 16%;
+    height: 72%;
+    background-color: #fff;
+  }
+  .logo:after {
+    content: '';
+    position: absolute;
+    width: calc(52% - 5px);
+    height: calc(51% - 5px);
+    border: 3.2px solid #fff;
+    border-radius: 0 50% 50% 0;
+    background-color: #4668DB;
+    top: 24%;
+    left: 20%;
+  }
+  .el-table__expanded-cell[class*=cell] {
+    padding: 10px;
+    padding-left: 50px;
+  }
+</style>
