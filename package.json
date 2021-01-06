@@ -1,4 +1,5 @@
 {
   "name": "report",
-  "main": "index.js"
+  "main": "index.js",
+  "version": "1.0"
 }
