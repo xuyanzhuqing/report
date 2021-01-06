@@ -19,5 +19,8 @@
   "bugs": {
     "url": "https://github.com/xuyanzhuqing/report/issues"
   },
+  "bin": {
+    "report": "./bin/index.js"
+  },
   "homepage": "https://github.com/xuyanzhuqing/report#readme"
 }
